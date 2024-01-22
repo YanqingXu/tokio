@@ -10,21 +10,15 @@ use std::{
     task::{self, Poll, Waker},
 };
 
-/// A bidirectional pipe to read and write bytes in memory.
+/// 一个双向管道，用于在内存中读写字节。
 ///
-/// A pair of `DuplexStream`s are created together, and they act as a "channel"
-/// that can be used as in-memory IO types. Writing to one of the pairs will
-/// allow that data to be read from the other, and vice versa.
+/// 一对`DuplexStream`是一起创建的，它们充当一个“通道”，可以用作内存中的IO类型。写入其中一个对将允许从另一个对中读取该数据，反之亦然。
 ///
-/// # Closing a `DuplexStream`
+/// # 关闭一个`DuplexStream`
 ///
-/// If one end of the `DuplexStream` channel is dropped, any pending reads on
-/// the other side will continue to read data until the buffer is drained, then
-/// they will signal EOF by returning 0 bytes. Any writes to the other side,
-/// including pending ones (that are waiting for free space in the buffer) will
-/// return `Err(BrokenPipe)` immediately.
-///
-/// # Example
+/// 如果`DuplexStream`通道的一端被丢弃，另一端的任何挂起读取都将继续读取数据，直到缓冲区被耗尽，然后它们将通过返回0字节来信号EOF。
+/// 对另一端的任何写入，包括挂起的写入（等待缓冲区中的空闲空间）都将立即返回`Err(BrokenPipe)`。
+/// # 例如
 ///
 /// ```
 /// # async fn ex() -> std::io::Result<()> {
@@ -51,36 +45,31 @@ pub struct DuplexStream {
     write: Arc<Mutex<Pipe>>,
 }
 
-/// A unidirectional IO over a piece of memory.
+/// 一个在内存上的单向IO。
 ///
-/// Data can be written to the pipe, and reading will return that data.
+/// 数据可以写入管道，读取将返回该数据。
 #[derive(Debug)]
 struct Pipe {
-    /// The buffer storing the bytes written, also read from.
+    /// 存储写入的字节的缓冲区，也从中读取。
     ///
-    /// Using a `BytesMut` because it has efficient `Buf` and `BufMut`
-    /// functionality already. Additionally, it can try to copy data in the
-    /// same buffer if there read index has advanced far enough.
+    /// 使用`BytesMut`，因为它已经有了高效的`Buf`和`BufMut`功能。此外，如果读取索引已经足够提前，它还可以尝试在同一缓冲区中复制数据。
     buffer: BytesMut,
-    /// Determines if the write side has been closed.
+    /// 决定写入端是否已关闭。
     is_closed: bool,
-    /// The maximum amount of bytes that can be written before returning
+    /// 写入端在返回`Poll::Pending`之前可以写入的最大字节数。
     /// `Poll::Pending`.
     max_buf_size: usize,
-    /// If the `read` side has been polled and is pending, this is the waker
-    /// for that parked task.
+    /// 如果`read`端已经被轮询并且处于挂起状态，则这是该挂起任务的唤醒器。
     read_waker: Option<Waker>,
-    /// If the `write` side has filled the `max_buf_size` and returned
-    /// `Poll::Pending`, this is the waker for that parked task.
+    /// 如果`write`端已经填满了`max_buf_size`并返回了`Poll::Pending`，则这是该挂起任务的唤醒器。
     write_waker: Option<Waker>,
 }
 
 // ===== impl DuplexStream =====
 
-/// Create a new pair of `DuplexStream`s that act like a pair of connected sockets.
+/// 创建一对`DuplexStream`，它们的行为就像一对连接的套接字。
 ///
-/// The `max_buf_size` argument is the maximum amount of bytes that can be
-/// written to a side before the write returns `Poll::Pending`.
+/// `max_buf_size`参数是可以写入一侧的最大字节数，在写入返回`Poll::Pending`之前。
 #[cfg_attr(docsrs, doc(cfg(feature = "io-util")))]
 pub fn duplex(max_buf_size: usize) -> (DuplexStream, DuplexStream) {
     let one = Arc::new(Mutex::new(Pipe::new(max_buf_size)));
@@ -99,11 +88,8 @@ pub fn duplex(max_buf_size: usize) -> (DuplexStream, DuplexStream) {
 }
 
 impl AsyncRead for DuplexStream {
-    // Previous rustc required this `self` to be `mut`, even though newer
-    // versions recognize it isn't needed to call `lock()`. So for
-    // compatibility, we include the `mut` and `allow` the lint.
-    //
-    // See https://github.com/rust-lang/rust/issues/73592
+    // 之前的rustc需要这个`self`是`mut`，即使更新的版本认识到它不需要调用`lock()`。所以为了兼容性，我们包含了`mut`和`allow`的lint。
+    // 参见 https://github.com/rust-lang/rust/issues/73592
     #[allow(unused_mut)]
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -155,7 +141,7 @@ impl AsyncWrite for DuplexStream {
 
 impl Drop for DuplexStream {
     fn drop(&mut self) {
-        // notify the other side of the closure
+        // 通知另一端的关闭
         self.write.lock().close_write();
         self.read.lock().close_read();
     }
@@ -176,7 +162,7 @@ impl Pipe {
 
     fn close_write(&mut self) {
         self.is_closed = true;
-        // needs to notify any readers that no more data will come
+        // 需要通知任何读取器，不会再有更多的数据
         if let Some(waker) = self.read_waker.take() {
             waker.wake();
         }
@@ -184,7 +170,7 @@ impl Pipe {
 
     fn close_read(&mut self) {
         self.is_closed = true;
-        // needs to notify any writers that they have to abort
+        // 需要通知任何写入器，他们必须中止
         if let Some(waker) = self.write_waker.take() {
             waker.wake();
         }
@@ -200,8 +186,7 @@ impl Pipe {
             buf.put_slice(&self.buffer[..max]);
             self.buffer.advance(max);
             if max > 0 {
-                // The passed `buf` might have been empty, don't wake up if
-                // no bytes have been moved.
+                // 传递的`buf`可能是空的，如果没有字节被移动，不要唤醒。
                 if let Some(waker) = self.write_waker.take() {
                     waker.wake();
                 }
